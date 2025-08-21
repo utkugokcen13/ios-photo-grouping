@@ -9,8 +9,8 @@ import Foundation
 import Photos
 
 struct Snapshot {
-    let counts: [PhotoGroup: Int]
-    let othersCount: Int
+    let addedByGroup: [PhotoGroup: [String]]   // newly added localIdentifier(s) per group
+    let addedOthers: [String]                  // newly added localIdentifier(s) for Others
     let processed: Int
     let total: Int
 }
@@ -30,6 +30,7 @@ final class ScanningService {
     private let throttleQueue = DispatchQueue(label: "scan.throttle") // serial for emit gating
     private let gate = DispatchSemaphore(value: 4) // bounded concurrency
     private let accumulator = AssetAccumulator()
+    private let collector = BatchCollector()
 
     private var isCancelled = false
     private var lastEmit = Date(timeIntervalSince1970: 0)
@@ -80,27 +81,38 @@ final class ScanningService {
                     let g = PhotoGroup.group(for: value)
                     let id = asset.localIdentifier
                     
-                    // Update accumulator
+                    // Update accumulator and collector
                     Task {
-                        _ = await self.accumulator.insert(id, into: g)
+                        let inserted = await self.accumulator.insert(id, into: g)
+                        if inserted {
+                            await self.collector.add(id: id, to: g)
+                        }
                     }
 
                     // Throttle UI snapshot
                     self.throttleQueue.sync {
                         Task {
-                            let snap = await self.accumulator.snapshotCounts()
+                            let snapCounts = await self.accumulator.snapshotCounts() // for processed/total only
                             // Only emit if enough items processed or time window passed
-                            if (snap.processed - processedAtLastEmit) >= self.emitBatch
+                            if (snapCounts.processed - processedAtLastEmit) >= self.emitBatch
                                 || Date().timeIntervalSince(self.lastEmit) >= self.emitInterval {
-                                processedAtLastEmit = snap.processed
+
+                                processedAtLastEmit = snapCounts.processed
                                 self.lastEmit = Date()
-                                
+
+                                let deltas = await self.collector.drain()
+                                guard !(deltas.byGroup.isEmpty && deltas.others.isEmpty) else { return }
+
                                 DispatchQueue.main.async {
-                                    self.delegate?.scanningService(self,
-                                        didUpdate: Snapshot(counts: snap.counts,
-                                                          othersCount: snap.others,
-                                                          processed: snap.processed,
-                                                          total: snap.total))
+                                    self.delegate?.scanningService(
+                                        self,
+                                        didUpdate: Snapshot(
+                                            addedByGroup: deltas.byGroup,
+                                            addedOthers: deltas.others,
+                                            processed: snapCounts.processed,
+                                            total: snapCounts.total
+                                        )
+                                    )
                                 }
                             }
                         }
@@ -112,14 +124,21 @@ final class ScanningService {
         group.notify(queue: workQueue) { [weak self] in
             guard let self = self else { return }
             Task {
-                let snap = await self.accumulator.snapshotCounts()
-                // Final emit
+                let snapCounts = await self.accumulator.snapshotCounts()
+                let deltas = await self.collector.drain()
                 DispatchQueue.main.async {
-                    self.delegate?.scanningService(self,
-                        didUpdate: Snapshot(counts: snap.counts,
-                                         othersCount: snap.others,
-                                         processed: snap.processed,
-                                         total: snap.total))
+                    // final delta (if any)
+                    if !(deltas.byGroup.isEmpty && deltas.others.isEmpty) {
+                        self.delegate?.scanningService(
+                            self,
+                            didUpdate: Snapshot(
+                                addedByGroup: deltas.byGroup,
+                                addedOthers: deltas.others,
+                                processed: snapCounts.processed,
+                                total: snapCounts.total
+                            )
+                        )
+                    }
                 }
                 let materialized = await self.accumulator.materialize()
                 DispatchQueue.main.async {

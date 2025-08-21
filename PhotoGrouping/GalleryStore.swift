@@ -14,31 +14,35 @@ final class GalleryStore: ObservableObject {
     @Published private(set) var processed: Int = 0
     @Published private(set) var total: Int = 0
 
-    func apply(snapshot: Snapshot) {
+    private var seen = Set<String>() // global seen set to guard against duplicates
 
-        // Update counts
+    func apply(snapshot: Snapshot) {
         processed = snapshot.processed
         total = snapshot.total
-        
-        var newGroups: [PhotoGroup: [String]] = [:]
-        for (group, count) in snapshot.counts {
-            if count > 0 {
-                newGroups[group] = Array(0..<count).map { "\(group.rawValue)_\($0)" }
+
+        // Append real IDs by group
+        for (g, ids) in snapshot.addedByGroup {
+            var bucket = groups[g, default: []]
+            for id in ids where !seen.contains(id) {
+                seen.insert(id)
+                bucket.append(id)
+            }
+            groups[g] = bucket
+        }
+
+        // Append Others
+        if !snapshot.addedOthers.isEmpty {
+            for id in snapshot.addedOthers where !seen.contains(id) {
+                seen.insert(id)
+                others.append(id)
             }
         }
-        let newOthers = snapshot.othersCount > 0 ? Array(0..<snapshot.othersCount).map { "others_\($0)" } : []
-        
-        // Update the published properties
-        groups = newGroups
-        others = newOthers
     }
 
     func finalize(groups: [PhotoGroup: [String]], others: [String]) {
-        let groupNames = Dictionary(uniqueKeysWithValues: groups.map { ($0.key.rawValue, $0.value) })
-        
         self.groups = groups
         self.others = others
-        
+        self.seen = Set(groups.values.flatMap { $0 } + others)
     }
 
     var nonEmptyGroups: [(PhotoGroup, Int)] {
