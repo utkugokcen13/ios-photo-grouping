@@ -16,11 +16,21 @@ class HomeViewController: UIViewController {
         case main
     }
     
+    enum GroupID: Hashable {
+        case group(PhotoGroup)
+        case others
+        var title: String {
+            switch self {
+            case .group(let g): return g.rawValue.uppercased()
+            case .others: return "Others"
+            }
+        }
+    }
+    
     struct Item: Hashable {
-        let id = UUID()
-        let title: String
-        let count: Int
-        let group: PhotoGroup?
+        let id: GroupID
+        var count: Int
+        var group: PhotoGroup?
     }
     
     // MARK: - Properties
@@ -31,10 +41,12 @@ class HomeViewController: UIViewController {
     private let store = GalleryStore()
     private let scanner = ScanningService()
     private let debouncer = Debouncer(delay: 0.05)  // 0.1 -> 0.05
+    private let progressDebouncer = Debouncer(delay: 0.15)
     
     private let progressView = UIProgressView(progressViewStyle: .default)
     private let progressLabel = UILabel()
     private var hasStartedScanning = false
+    private var updateCoordinator: ListUpdateCoordinator!
     
     // MARK: - Lifecycle
     
@@ -45,14 +57,12 @@ class HomeViewController: UIViewController {
         setupDataSource()
         setupScanner()
         
-        // Show initial empty state
-        rebuildSnapshot()
+        applyStoreToList()
     }
     
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         
-        // Start scanning only once
         if !hasStartedScanning {
             hasStartedScanning = true
             scanner.startScan()
@@ -92,6 +102,7 @@ class HomeViewController: UIViewController {
         collectionView.delegate = self
         collectionView.allowsSelection = true
         collectionView.delaysContentTouches = false
+        collectionView.canCancelContentTouches = true
         
         collectionView.isPrefetchingEnabled = true
         collectionView.prefetchDataSource = self
@@ -134,36 +145,31 @@ class HomeViewController: UIViewController {
             cell.configure(with: item)
             return cell
         }
+        
+        updateCoordinator = ListUpdateCoordinator(collectionView: collectionView, dataSource: dataSource)
     }
     
     private func setupScanner() {
         scanner.delegate = self
     }
     
-    private func rebuildSnapshot() {
-        DispatchQueue.main.async { [weak self] in
+    private func buildItemsFromStore() -> [Item] {
+        var items: [Item] = []
+        for (group, count) in store.nonEmptyGroups {
+            items.append(Item(id: .group(group), count: count, group: group))
+        }
+        if store.others.count > 0 {
+            items.append(Item(id: .others, count: store.others.count, group: nil))
+        }
+        return items
+    }
+    
+    private func applyStoreToList() {
+        // Coalesce to avoid spamming main thread
+        debouncer.schedule { [weak self] in
             guard let self = self else { return }
-            
-            var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
-            snapshot.appendSections([.main])
-
-            var items: [Item] = []
-
-            // Add non-empty groups
-            for (group, count) in store.nonEmptyGroups {
-                items.append(Item(title: group.rawValue.uppercased(), count: count, group: group))
-            }
-
-            // Add Others if it has items
-            if store.others.count > 0 {
-                items.append(Item(title: "Others", count: store.others.count, group: nil))
-            }
-
-            snapshot.appendItems(items, toSection: .main)
-            
-            // Use animatingDifferences: false during scanning for better performance
-            let shouldAnimate = store.processed < store.total ? false : true
-            self.dataSource.apply(snapshot, animatingDifferences: shouldAnimate)
+            let items = self.buildItemsFromStore()
+            self.updateCoordinator.setItems(items)
         }
     }
 }
@@ -175,6 +181,9 @@ extension HomeViewController: UICollectionViewDelegate {
         collectionView.deselectItem(at: indexPath, animated: true)
         
         let item = dataSource.itemIdentifier(for: indexPath)!
+        
+        updateCoordinator.beginNavigationPriorityWindow()
+        
         let detail = UIHostingController(rootView: GroupDetailView(group: item.group, store: store))
         navigationController?.pushViewController(detail, animated: true)
     }
@@ -196,8 +205,9 @@ extension HomeViewController: ScanningServiceDelegate {
     func scanningService(_ service: ScanningService, didUpdate snapshot: Snapshot) {
         store.apply(snapshot: snapshot)
         
-        // Update progress UI
-        DispatchQueue.main.async {
+        // Update progress UI with throttling
+        progressDebouncer.schedule { [weak self] in
+            guard let self = self else { return }
             let progress = Float(snapshot.processed) / Float(max(1, snapshot.total))
             self.progressView.setProgress(progress, animated: true)
             
@@ -205,10 +215,8 @@ extension HomeViewController: ScanningServiceDelegate {
             self.progressLabel.text = "Scanning photos: \(percentage)% (\(snapshot.processed)/\(snapshot.total))"
         }
         
-        // Debounce UI snapshot updates
-        debouncer.schedule { [weak self] in
-            self?.rebuildSnapshot()
-        }
+        // Apply store updates to list
+        applyStoreToList()
     }
     
     func scanningServiceDidComplete(_ service: ScanningService, groups: [PhotoGroup: [String]], others: [String]) {
@@ -220,8 +228,8 @@ extension HomeViewController: ScanningServiceDelegate {
             self.progressView.setProgress(1.0, animated: true)
         }
         
-        // Rebuild snapshot with final data
-        rebuildSnapshot()
+        // Apply final store updates to list
+        applyStoreToList()
     }
     
     func scanningService(_ service: ScanningService, didFailWithError error: Error) {
@@ -250,8 +258,8 @@ class GroupCell: UICollectionViewCell {
     }
     
     private func setupUI() {
-        backgroundColor = .secondarySystemBackground
-        layer.cornerRadius = 12
+        contentView.backgroundColor = .secondarySystemBackground
+        contentView.layer.cornerRadius = 12
         
         titleLabel.font = .systemFont(ofSize: 18, weight: .semibold)
         titleLabel.textColor = .label
@@ -277,17 +285,17 @@ class GroupCell: UICollectionViewCell {
         super.prepareForReuse()
         titleLabel.text = nil
         countLabel.text = nil
-        backgroundColor = .secondarySystemBackground
+        contentView.backgroundColor = .secondarySystemBackground
     }
     
     override var isHighlighted: Bool {
         didSet {
-            contentView.alpha = isHighlighted ? 0.95 : 1.0
+            contentView.alpha = isHighlighted ? 0.98 : 1.0
         }
     }
     
     func configure(with item: HomeViewController.Item) {
-        titleLabel.text = item.title
+        titleLabel.text = item.id.title
         countLabel.text = "\(item.count) photos"
     }
 }

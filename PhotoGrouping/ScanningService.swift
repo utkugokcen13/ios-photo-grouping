@@ -33,8 +33,8 @@ final class ScanningService {
 
     private var isCancelled = false
     private var lastEmit = Date(timeIntervalSince1970: 0)
-    private let emitInterval: TimeInterval = 0.1
-    private let emitBatch = 20
+    private let emitInterval: TimeInterval = 0.25
+    private let emitBatch = 50
 
     func startScan() {
         isCancelled = false
@@ -95,7 +95,6 @@ final class ScanningService {
                                 processedAtLastEmit = snap.processed
                                 self.lastEmit = Date()
                                 
-                                // Use async to prevent blocking
                                 DispatchQueue.main.async {
                                     self.delegate?.scanningService(self,
                                         didUpdate: Snapshot(counts: snap.counts,
