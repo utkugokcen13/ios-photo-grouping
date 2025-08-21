@@ -31,4 +31,11 @@ actor AssetAccumulator {
         let result = (groups: groupsArray, others: Array(others))
         return result
     }
+
+    func reset() {
+        groups = [:]
+        others = []
+        processed = 0
+        total = 0
+    }
 }

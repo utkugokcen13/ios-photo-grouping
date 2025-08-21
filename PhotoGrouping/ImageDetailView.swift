@@ -8,6 +8,7 @@
 import SwiftUI
 import Photos
 
+// MARK: - Image Detail with Smooth Paging
 struct ImageDetailView: View {
     let assetIDs: [String]
     @State var index: Int
@@ -20,8 +21,7 @@ struct ImageDetailView: View {
     
     var body: some View {
         ZStack {
-            Color.black
-                .ignoresSafeArea()
+            Color.black.ignoresSafeArea()
             
             if assetIDs.isEmpty {
                 VStack {
@@ -33,22 +33,13 @@ struct ImageDetailView: View {
                         .font(.title2)
                 }
             } else {
-                TabView(selection: $index) {
-                    ForEach(Array(assetIDs.enumerated()), id: \.element) { idx, assetID in
-                        AssetImageView(assetID: assetID)
-                            .tag(idx)
-                    }
-                }
-                .tabViewStyle(.page)
-                .indexViewStyle(.page(backgroundDisplayMode: .always))
+                PageViewController(pages: assetIDs.map { AssetImageView(assetID: $0) }, currentIndex: $index)
             }
         }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button("Close") {
-                    dismiss()
-                }
-                .foregroundColor(.white)
+                Button("Close") { dismiss() }
+                    .foregroundColor(.white)
             }
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -56,10 +47,80 @@ struct ImageDetailView: View {
     }
 }
 
+// MARK: - UIKit PageViewController Wrapper
+struct PageViewController<Page: View>: UIViewControllerRepresentable {
+    var pages: [Page]
+    @Binding var currentIndex: Int
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    func makeUIViewController(context: Context) -> UIPageViewController {
+        let vc = UIPageViewController(
+            transitionStyle: .scroll,
+            navigationOrientation: .horizontal
+        )
+        vc.dataSource = context.coordinator
+        vc.delegate = context.coordinator
+        
+        let first = context.coordinator.controllers[currentIndex]
+        vc.setViewControllers([first], direction: .forward, animated: false)
+        
+        return vc
+    }
+    
+    func updateUIViewController(_ pageVC: UIPageViewController, context: Context) {
+        let controller = context.coordinator.controllers[currentIndex]
+        pageVC.setViewControllers([controller], direction: .forward, animated: false)
+    }
+    
+    class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
+        var parent: PageViewController
+        var controllers: [UIViewController]
+        
+        init(_ parent: PageViewController) {
+            self.parent = parent
+            self.controllers = parent.pages.map { UIHostingController(rootView: $0) }
+        }
+        
+        func pageViewController(
+            _ pageViewController: UIPageViewController,
+            viewControllerBefore viewController: UIViewController
+        ) -> UIViewController? {
+            guard let index = controllers.firstIndex(of: viewController) else { return nil }
+            return index == 0 ? nil : controllers[index - 1]
+        }
+        
+        func pageViewController(
+            _ pageViewController: UIPageViewController,
+            viewControllerAfter viewController: UIViewController
+        ) -> UIViewController? {
+            guard let index = controllers.firstIndex(of: viewController) else { return nil }
+            return index + 1 == controllers.count ? nil : controllers[index + 1]
+        }
+        
+        func pageViewController(
+            _ pageViewController: UIPageViewController,
+            didFinishAnimating finished: Bool,
+            previousViewControllers: [UIViewController],
+            transitionCompleted completed: Bool
+        ) {
+            if completed, let visible = pageViewController.viewControllers?.first,
+               let index = controllers.firstIndex(of: visible) {
+                parent.currentIndex = index
+            }
+        }
+    }
+}
+
+// MARK: - AssetImageView with Flicker Fix
 struct AssetImageView: View {
     let assetID: String
     @State private var image: UIImage?
     @State private var isLoading = true
+    
+    private let imageManager = PHCachingImageManager.default()
     
     var body: some View {
         Group {
@@ -76,7 +137,6 @@ struct AssetImageView: View {
                     Image(systemName: "exclamationmark.triangle")
                         .font(.system(size: 50))
                         .foregroundColor(.white)
-                    
                     Text("Failed to load image")
                         .font(.title3)
                         .foregroundColor(.white)
@@ -84,9 +144,7 @@ struct AssetImageView: View {
                 }
             }
         }
-        .onAppear {
-            loadImage()
-        }
+        .onAppear { loadImage() }
     }
     
     private func loadImage() {
@@ -100,13 +158,18 @@ struct AssetImageView: View {
         options.deliveryMode = .highQualityFormat
         options.isNetworkAccessAllowed = true
         options.isSynchronous = false
+        options.resizeMode = .fast
+        options.isNetworkAccessAllowed = true
         
-        PHImageManager.default().requestImage(
+        imageManager.requestImage(
             for: asset,
-            targetSize: PHImageManagerMaximumSize,
+            targetSize: UIScreen.main.bounds.size * UIScreen.main.scale,
             contentMode: .aspectFit,
             options: options
-        ) { result, _ in
+        ) { result, info in
+            // Skip degraded images completely
+            if let degraded = info?[PHImageResultIsDegradedKey] as? Bool, degraded { return }
+            
             DispatchQueue.main.async {
                 self.image = result
                 self.isLoading = false
@@ -115,8 +178,9 @@ struct AssetImageView: View {
     }
 }
 
-#Preview {
-    NavigationView {
-        ImageDetailView(assetIDs: ["sample1", "sample2"], startIndex: 0)
+// Helper: scale CGSize
+fileprivate extension CGSize {
+    static func * (lhs: CGSize, rhs: CGFloat) -> CGSize {
+        return CGSize(width: lhs.width * rhs, height: lhs.height * rhs)
     }
 }

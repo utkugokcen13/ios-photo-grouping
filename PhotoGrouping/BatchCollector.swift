@@ -21,4 +21,9 @@ actor BatchCollector {
     }
 
     var isEmpty: Bool { addedByGroup.isEmpty && addedOthers.isEmpty }
+
+    func reset() {
+        addedByGroup = [:]
+        addedOthers = []
+    }
 }

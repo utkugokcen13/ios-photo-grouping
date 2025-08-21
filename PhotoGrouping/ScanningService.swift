@@ -29,18 +29,26 @@ final class ScanningService {
     private let workQueue = DispatchQueue(label: "scan.queue", qos: .userInitiated, attributes: .concurrent)
     private let throttleQueue = DispatchQueue(label: "scan.throttle") // serial for emit gating
     private let gate = DispatchSemaphore(value: 4) // bounded concurrency
-    private let accumulator = AssetAccumulator()
-    private let collector = BatchCollector()
+    // Make these VAR so we can reset:
+    private var accumulator = AssetAccumulator()
+    private var collector = BatchCollector()
+    private let journal = SeenJournal.shared
 
     private var isCancelled = false
     private var lastEmit = Date(timeIntervalSince1970: 0)
     private let emitInterval: TimeInterval = 0.25
     private let emitBatch = 50
+    private var initialSeen = Set<String>()
 
-    func startScan() {
+    func startScan(initialSeen: Set<String> = []) {
+        // Merge with journal
+        let journalSeen = self.journal.loadAll()
+        let merged = initialSeen.union(journalSeen)
+        self.initialSeen = merged
+        print("Starting scan with \(merged.count) seen IDs (persisted:\(initialSeen.count), journal:\(journalSeen.count))")
         isCancelled = false
 
-        PHPhotoLibrary.requestAuthorization { [weak self] status in
+        PHPhotoLibrary.requestAuthorization(for: .readWrite) { [weak self] status in
             guard let self = self else { return }
             guard status == .authorized || status == .limited else {
                 DispatchQueue.main.async {
@@ -56,36 +64,87 @@ final class ScanningService {
 
     func stopScan() { isCancelled = true }
 
+    // Cancel & reset state so a fresh scan can begin
+    func cancelAndReset(completion: (() -> Void)? = nil) {
+        isCancelled = true
+        throttleQueue.sync {
+            Task {
+                await self.accumulator.reset()
+                await self.collector.reset()
+                self.lastEmit = Date(timeIntervalSince1970: 0)
+                self.initialSeen = []
+                self.journal.clear()
+                DispatchQueue.main.async { completion?() }
+            }
+        }
+    }
+
+    // Flush pending batch to delegate so the store persists exact progress
+    func requestCheckpoint(completion: @escaping (Snapshot?) -> Void) {
+        throttleQueue.sync {
+            Task {
+                let counts = await self.accumulator.snapshotCounts()
+                let deltas = await self.collector.drain()
+                // Build a snapshot only if there is something new; still include counts for accuracy
+                let snap = (deltas.byGroup.isEmpty && deltas.others.isEmpty)
+                    ? nil
+                    : Snapshot(addedByGroup: deltas.byGroup,
+                               addedOthers: deltas.others,
+                               processed: counts.processed,
+                               total: counts.total)
+                // Also still notify delegate if we built a snapshot (optional, UI can reflect last bits)
+                if let snap = snap {
+                    DispatchQueue.main.async {
+                        self.delegate?.scanningService(self, didUpdate: snap)
+                    }
+                }
+                DispatchQueue.main.async { completion(snap) }
+            }
+            // Flush journal on checkpoint
+            self.journal.flushSync()
+        }
+    }
+
     private func scanAssets() {
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
         let fetch = PHAsset.fetchAssets(with: options)
-        Task { await accumulator.setTotal(fetch.count) }
+
+        Task {
+            await accumulator.setTotal(fetch.count)
+            // Seed "processed" so progress is exact on resume
+            for id in initialSeen { _ = await accumulator.insert(id, into: nil) }
+        }
 
         // Process all assets with bounded concurrency
         let group = DispatchGroup()
-        var processedAtLastEmit = 0
+        let initialProcessed = initialSeen.count
+        var processedAtLastEmit = initialProcessed   // <-- instead of 0
 
         for i in 0..<fetch.count {
             if isCancelled { break }
             let asset = fetch.object(at: i)
+            let id = asset.localIdentifier
+            if initialSeen.contains(id) { continue }
+
             gate.wait()
             group.enter()
             workQueue.async { [weak self] in
                 defer { self?.gate.signal(); group.leave() }
-                guard let self = self else { return }
+                guard let self = self, !self.isCancelled else { return }
 
                 autoreleasepool {
                     let value = asset.reliableHash()
                     let g = PhotoGroup.group(for: value)
-                    let id = asset.localIdentifier
-                    
-                    // Update accumulator and collector
+
                     Task {
+                        if await self.isCancelled { return }
                         let inserted = await self.accumulator.insert(id, into: g)
-                        if inserted {
+                        if inserted { 
                             await self.collector.add(id: id, to: g)
+                            // also journal
+                            self.journal.append([id])
                         }
                     }
 
@@ -102,6 +161,7 @@ final class ScanningService {
 
                                 let deltas = await self.collector.drain()
                                 guard !(deltas.byGroup.isEmpty && deltas.others.isEmpty) else { return }
+                                if await self.isCancelled { return }
 
                                 DispatchQueue.main.async {
                                     self.delegate?.scanningService(
@@ -126,9 +186,8 @@ final class ScanningService {
             Task {
                 let snapCounts = await self.accumulator.snapshotCounts()
                 let deltas = await self.collector.drain()
-                DispatchQueue.main.async {
-                    // final delta (if any)
-                    if !(deltas.byGroup.isEmpty && deltas.others.isEmpty) {
+                if !self.isCancelled, !(deltas.byGroup.isEmpty && deltas.others.isEmpty) {
+                    DispatchQueue.main.async {
                         self.delegate?.scanningService(
                             self,
                             didUpdate: Snapshot(
@@ -141,11 +200,15 @@ final class ScanningService {
                     }
                 }
                 let materialized = await self.accumulator.materialize()
-                DispatchQueue.main.async {
-                    self.delegate?.scanningServiceDidComplete(self,
-                        groups: materialized.groups,
-                        others: materialized.others)
+                if !self.isCancelled {
+                    DispatchQueue.main.async {
+                        self.delegate?.scanningServiceDidComplete(self,
+                            groups: materialized.groups,
+                            others: materialized.others)
+                    }
                 }
+                // Clear journal because everything is now persisted
+                self.journal.clear()
             }
         }
     }

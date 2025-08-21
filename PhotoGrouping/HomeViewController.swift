@@ -47,6 +47,9 @@ class HomeViewController: UIViewController {
     private let progressLabel = UILabel()
     private var hasStartedScanning = false
     private var updateCoordinator: ListUpdateCoordinator!
+    private var observers: [NSObjectProtocol] = []
+    private let resetButton = UIButton(type: .system)
+    private let row = UIStackView() // Horizontal stack for progress label and reset button
     
     // MARK: - Lifecycle
     
@@ -57,7 +60,24 @@ class HomeViewController: UIViewController {
         setupDataSource()
         setupScanner()
         
-        applyStoreToList()
+        applyStoreToList() // show persisted data immediately if any
+        
+        // Update progress UI if we have persisted data
+        if store.processed > 0 {
+            let progress = Float(store.processed) / Float(max(1, store.total))
+            progressView.setProgress(progress, animated: false)
+            let percentage = Int(100.0 * progress)
+            progressLabel.text = "Resuming scan: \(percentage)% (\(store.processed)/\(store.total))"
+            resetButton.isHidden = false // Show reset button when resuming
+        } else {
+            // Show initial state
+            progressView.setProgress(0.0, animated: false)
+            progressLabel.text = "Ready to scan photos"
+            resetButton.isHidden = false
+        }
+
+        // Install lifecycle observers for checkpoint persistence
+        installLifecycleObservers()
     }
     
     override func viewDidAppear(_ animated: Bool) {
@@ -65,7 +85,8 @@ class HomeViewController: UIViewController {
         
         if !hasStartedScanning {
             hasStartedScanning = true
-            scanner.startScan()
+            scanner.delegate = self
+            scanner.startScan(initialSeen: store.knownIDs())
         }
     }
     
@@ -82,17 +103,37 @@ class HomeViewController: UIViewController {
         progressLabel.font = .systemFont(ofSize: 14)
         progressLabel.textColor = .secondaryLabel
         
+        // Ensure progress view is visible
+        progressView.progress = 0.0
+        
+        // Setup reset button
+        resetButton.setTitle("Cancel & Reset", for: .normal)
+        resetButton.addTarget(self, action: #selector(didTapReset), for: .touchUpInside)
+        resetButton.isHidden = false // Show initially so user can reset if needed
+        
+        // Configure horizontal stack for progress label and reset button
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        row.addArrangedSubview(progressLabel)
+        row.addArrangedSubview(resetButton)
+        row.axis = .horizontal
+        row.alignment = .center
+        row.distribution = .fill
+        row.spacing = 8
+        progressLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        resetButton.setContentHuggingPriority(.required, for: .horizontal)
+        
         view.addSubview(progressView)
-        view.addSubview(progressLabel)
+        view.addSubview(row)
         
         NSLayoutConstraint.activate([
             progressView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 16),
             progressView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
             progressView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
             
-            progressLabel.topAnchor.constraint(equalTo: progressView.bottomAnchor, constant: 8),
-            progressLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            progressLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16)
+            row.topAnchor.constraint(equalTo: progressView.bottomAnchor, constant: 8),
+            row.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            row.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16)
         ])
     }
     
@@ -113,7 +154,7 @@ class HomeViewController: UIViewController {
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         
         NSLayoutConstraint.activate([
-            collectionView.topAnchor.constraint(equalTo: progressLabel.bottomAnchor, constant: 16),
+            collectionView.topAnchor.constraint(equalTo: row.bottomAnchor, constant: 16),
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
@@ -150,7 +191,7 @@ class HomeViewController: UIViewController {
     }
     
     private func setupScanner() {
-        scanner.delegate = self
+        // Scanner delegate set in viewDidAppear when starting scan
     }
     
     private func buildItemsFromStore() -> [Item] {
@@ -171,6 +212,60 @@ class HomeViewController: UIViewController {
             let items = self.buildItemsFromStore()
             self.updateCoordinator.setItems(items)
         }
+    }
+
+    // Install lifecycle observers for checkpoint persistence
+    private func installLifecycleObservers() {
+        let nc = NotificationCenter.default
+        let handler: (Notification) -> Void = { [weak self] _ in
+            guard let self = self else { return }
+            var bg: UIBackgroundTaskIdentifier = .invalid
+            bg = UIApplication.shared.beginBackgroundTask(withName: "PersistCheckpoint") {
+                UIApplication.shared.endBackgroundTask(bg)
+            }
+
+            // 1) Ask scanner for a checkpoint snapshot (returned in completion)
+            self.scanner.requestCheckpoint { snap in
+                // 2) If there's new data, apply it *without* debounce and force-save
+                if let snap = snap {
+                    self.store.apply(snapshot: snap, forceSave: true)
+                } else {
+                    // 3) Even if no new deltas, force-save current store
+                    PersistenceManager.shared.save(groups: self.store.groups,
+                                                   others: self.store.others,
+                                                   total: self.store.total,
+                                                   processed: self.store.processed,
+                                                   throttle: 0.0,
+                                                   force: true)
+                }
+                // 4) Flush journal to ensure all seen IDs are persisted
+                SeenJournal.shared.flushSync()
+                UIApplication.shared.endBackgroundTask(bg)
+            }
+        }
+        observers.append(nc.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main, using: handler))
+        observers.append(nc.addObserver(forName: UIApplication.willTerminateNotification, object: nil, queue: .main, using: handler))
+    }
+
+    // Reset flow
+    @objc private func didTapReset() {
+        // 1) Stop current scan & reset scanner state
+        scanner.cancelAndReset { [weak self] in
+            guard let self = self else { return }
+            // 2) Clear persisted & in-memory store
+            self.store.resetAll()
+            self.progressView.setProgress(0, animated: false)
+            self.progressLabel.text = "Scanning photos: 0% (0/0)"
+            self.applyStoreToList()
+            // 3) Start a fresh scan from 0
+            self.scanner.delegate = self
+            self.scanner.startScan(initialSeen: [])
+        }
+    }
+
+    deinit {
+        let nc = NotificationCenter.default
+        for o in observers { nc.removeObserver(o) }
     }
 }
 
@@ -217,10 +312,12 @@ extension HomeViewController: ScanningServiceDelegate {
         
         // Apply store updates to list
         applyStoreToList()
+        
+        // Show reset button when we have progress
+        resetButton.isHidden = (store.processed == 0 && store.total == 0)
     }
     
     func scanningServiceDidComplete(_ service: ScanningService, groups: [PhotoGroup: [String]], others: [String]) {
-        // Finalize the store with complete data
         store.finalize(groups: groups, others: others)
         
         DispatchQueue.main.async {
@@ -230,6 +327,9 @@ extension HomeViewController: ScanningServiceDelegate {
         
         // Apply final store updates to list
         applyStoreToList()
+        
+        // Always show reset button when complete
+        resetButton.isHidden = false
     }
     
     func scanningService(_ service: ScanningService, didFailWithError error: Error) {
