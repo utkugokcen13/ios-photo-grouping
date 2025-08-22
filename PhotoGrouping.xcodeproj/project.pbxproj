@@ -29,20 +29,42 @@
 		1F5A06D92E5755B4005B6555 /* PhotoGroupingUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PhotoGroupingUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		1F5A09362E58A4C7005B6555 /* Exceptions for "PhotoGrouping" folder in "PhotoGrouping" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Tests/PhotoGroupingTests/PhotoGroupingTests.swift,
+				Tests/PhotoGroupingUITests/PhotoGroupingUITests.swift,
+				Tests/PhotoGroupingUITests/PhotoGroupingUITestsLaunchTests.swift,
+			);
+			target = 1F5A06BE2E5755B2005B6555 /* PhotoGrouping */;
+		};
+		1F5A09372E58A4C7005B6555 /* Exceptions for "PhotoGrouping" folder in "PhotoGroupingTests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Tests/PhotoGroupingTests/PhotoGroupingTests.swift,
+			);
+			target = 1F5A06CE2E5755B4005B6555 /* PhotoGroupingTests */;
+		};
+		1F5A093D2E58A4CB005B6555 /* Exceptions for "PhotoGrouping" folder in "PhotoGroupingUITests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Tests/PhotoGroupingUITests/PhotoGroupingUITests.swift,
+				Tests/PhotoGroupingUITests/PhotoGroupingUITestsLaunchTests.swift,
+			);
+			target = 1F5A06D82E5755B4005B6555 /* PhotoGroupingUITests */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		1F5A06C12E5755B2005B6555 /* PhotoGrouping */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				1F5A09362E58A4C7005B6555 /* Exceptions for "PhotoGrouping" folder in "PhotoGrouping" target */,
+				1F5A09372E58A4C7005B6555 /* Exceptions for "PhotoGrouping" folder in "PhotoGroupingTests" target */,
+				1F5A093D2E58A4CB005B6555 /* Exceptions for "PhotoGrouping" folder in "PhotoGroupingUITests" target */,
+			);
 			path = PhotoGrouping;
-			sourceTree = "<group>";
-		};
-		1F5A06D22E5755B4005B6555 /* PhotoGroupingTests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = PhotoGroupingTests;
-			sourceTree = "<group>";
-		};
-		1F5A06DC2E5755B4005B6555 /* PhotoGroupingUITests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = PhotoGroupingUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -76,8 +98,6 @@
 			isa = PBXGroup;
 			children = (
 				1F5A06C12E5755B2005B6555 /* PhotoGrouping */,
-				1F5A06D22E5755B4005B6555 /* PhotoGroupingTests */,
-				1F5A06DC2E5755B4005B6555 /* PhotoGroupingUITests */,
 				1F5A06C02E5755B2005B6555 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -130,9 +150,6 @@
 			dependencies = (
 				1F5A06D12E5755B4005B6555 /* PBXTargetDependency */,
 			);
-			fileSystemSynchronizedGroups = (
-				1F5A06D22E5755B4005B6555 /* PhotoGroupingTests */,
-			);
 			name = PhotoGroupingTests;
 			packageProductDependencies = (
 			);
@@ -152,9 +169,6 @@
 			);
 			dependencies = (
 				1F5A06DB2E5755B4005B6555 /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				1F5A06DC2E5755B4005B6555 /* PhotoGroupingUITests */,
 			);
 			name = PhotoGroupingUITests;
 			packageProductDependencies = (
@@ -395,10 +409,10 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_ASSET_PATHS = "\"PhotoGrouping/Preview Content\"";
 				DEVELOPMENT_TEAM = S4L236FF6M;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Clustr;
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "We need access to your photo library to scan and group photos.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -426,10 +440,10 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_ASSET_PATHS = "\"PhotoGrouping/Preview Content\"";
 				DEVELOPMENT_TEAM = S4L236FF6M;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Clustr;
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "We need access to your photo library to scan and group photos.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

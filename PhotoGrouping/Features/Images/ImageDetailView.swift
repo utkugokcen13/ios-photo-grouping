@@ -8,7 +8,6 @@
 import SwiftUI
 import Photos
 
-// MARK: - Image Detail with Smooth Paging
 struct ImageDetailView: View {
     @StateObject private var vm: ImageDetailViewModel
     @Environment(\.dismiss) private var dismiss
@@ -83,10 +82,8 @@ struct PageViewController<Page: View>: UIViewControllerRepresentable {
         let C = context.coordinator
         C.totalCount = pages.count
 
-        // Swipe/anim sırasında veya programatik set sürerken dokunma
         guard !C.isAnimating, !C.isProgrammaticSet else { return }
 
-        // Görünür index ile binding farklıysa, hizala
         if let visible = pvc.viewControllers?.first,
            let visIdx = C.index(of: visible),
            visIdx != currentIndex,
@@ -225,7 +222,6 @@ struct AssetImageView: View {
     }
 }
 
-// Helper: scale CGSize
 fileprivate extension CGSize {
     static func * (lhs: CGSize, rhs: CGFloat) -> CGSize {
         return CGSize(width: lhs.width * rhs, height: lhs.height * rhs)

@@ -1,3 +1,10 @@
+//
+//  SeenJournal.swift
+//  PhotoGrouping
+//
+//  Created by Utku Gökçen on 21.08.2025.
+//
+
 import Foundation
 
 final class SeenJournal {
@@ -35,7 +42,6 @@ final class SeenJournal {
         q.sync {
             if let data = try? Data(contentsOf: self.url),
                let text = String(data: data, encoding: .utf8) {
-                // newline-separated IDs
                 ids = text.split(whereSeparator: \.isNewline).map { String($0) }
             }
             ids.append(contentsOf: self.pending)
@@ -51,11 +57,9 @@ final class SeenJournal {
         }
     }
 
-    // MARK: - Private
-
     private func flushIfNeeded() {
         let now = Date()
-        if now.timeIntervalSince(self.lastFlush) >= 0.25 || pending.count >= 100 {
+        if now.timeIntervalSince(self.lastFlush) >= 0.1 || pending.count >= 25 {
             flush(force: false)
             lastFlush = now
         }
@@ -74,7 +78,6 @@ final class SeenJournal {
             }
             try? handle.close()
         } else {
-            // Create file
             let text = toWrite.joined(separator: "\n") + "\n"
             try? text.data(using: .utf8)?.write(to: url, options: .atomic)
         }

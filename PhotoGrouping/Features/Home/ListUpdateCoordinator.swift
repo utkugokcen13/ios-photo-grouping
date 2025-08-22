@@ -1,3 +1,10 @@
+//
+//  ListUpdateCoordinator.swift
+//  PhotoGrouping
+//
+//  Created by Utku Gökçen on 21.08.2025.
+//
+
 import UIKit
 
 final class ListUpdateCoordinator {

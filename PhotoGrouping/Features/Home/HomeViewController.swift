@@ -31,8 +31,6 @@ class HomeViewController: UIViewController {
         var group: PhotoGroup?
     }
     
-    // MARK: - Properties
-    
     private var collectionView: UICollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<Section, Item>!
     
@@ -48,9 +46,7 @@ class HomeViewController: UIViewController {
     private var observers: [NSObjectProtocol] = []
     private let resetButton = UIButton(type: .system)
     private let row = UIStackView()
-    
-    // MARK: - Lifecycle
-    
+
     override func viewDidLoad() {
         super.viewDidLoad()
         setupUI()
@@ -60,15 +56,22 @@ class HomeViewController: UIViewController {
         
         applyStoreToList()
         
-        // Update progress UI if we have persisted data
         if store.processed > 0 {
-            let progress = Float(store.processed) / Float(max(1, store.total))
+            let actualProcessed = store.groups.values.reduce(0) { $0 + $1.count } + store.others.count
+            let progress = Float(actualProcessed) / Float(max(1, store.total))
             progressView.setProgress(progress, animated: false)
             let percentage = Int(100.0 * progress)
-            progressLabel.text = "Resuming scan: \(percentage)% (\(store.processed)/\(store.total))"
+            
+            if actualProcessed >= store.total {
+                progressLabel.text = "Scan completed! (\(store.total) photos)"
+                progressView.setProgress(1.0, animated: false)
+                store.updateProgress(processed: store.total, total: store.total)
+            } else {
+                progressLabel.text = "Resuming scan: \(percentage)% (\(actualProcessed)/\(store.total))"
+                store.updateProgress(processed: actualProcessed, total: store.total)
+            }
             resetButton.isHidden = false
         } else {
-            // Show initial state
             progressView.setProgress(0.0, animated: false)
             progressLabel.text = "Ready to scan photos"
             resetButton.isHidden = false
@@ -84,6 +87,27 @@ class HomeViewController: UIViewController {
         if !hasStartedScanning {
             hasStartedScanning = true
             scanner.delegate = self
+            scanner.bootstrap(groups: store.groups,
+                              others: store.others,
+                              total: store.total,
+                              processed: store.processed)
+            
+            if store.processed > 0 {
+                let actualProcessed = store.groups.values.reduce(0) { $0 + $1.count } + store.others.count
+                let progress = Float(actualProcessed) / Float(max(1, store.total))
+                progressView.setProgress(progress, animated: false)
+                let percentage = Int(100.0 * progress)
+                
+                if actualProcessed >= store.total {
+                    progressLabel.text = "Scan completed! (\(store.total) photos)"
+                    progressView.setProgress(1.0, animated: false)
+                    store.updateProgress(processed: store.total, total: store.total)
+                } else {
+                    progressLabel.text = "Resuming scan: \(percentage)% (\(actualProcessed)/\(store.total))"
+                    store.updateProgress(processed: actualProcessed, total: store.total)
+                }
+            }
+            
             scanner.startScan(initialSeen: store.knownIDs())
         }
     }
@@ -100,8 +124,6 @@ class HomeViewController: UIViewController {
         progressLabel.text = "Scanning photos: 0% (0/0)"
         progressLabel.font = .systemFont(ofSize: 14)
         progressLabel.textColor = .secondaryLabel
-        
-        // Ensure progress view is visible
         progressView.progress = 0.0
         
         // Setup reset button
@@ -301,26 +323,42 @@ extension HomeViewController: ScanningServiceDelegate {
         // Update progress UI with throttling
         progressDebouncer.schedule { [weak self] in
             guard let self = self else { return }
-            let progress = Float(snapshot.processed) / Float(max(1, snapshot.total))
+            
+            let actualProcessed = self.store.groups.values.reduce(0) { $0 + $1.count } + self.store.others.count
+            let progress = Float(actualProcessed) / Float(max(1, snapshot.total))
             self.progressView.setProgress(progress, animated: true)
             
             let percentage = Int(100.0 * progress)
-            self.progressLabel.text = "Scanning photos: \(percentage)% (\(snapshot.processed)/\(snapshot.total))"
+            
+            if percentage >= 100 {
+                self.progressLabel.text = "Scan completed! (\(actualProcessed) photos)"
+                self.progressView.setProgress(1.0, animated: true)
+                self.store.updateProgress(processed: actualProcessed, total: actualProcessed)
+            } else {
+                self.progressLabel.text = "Scanning photos: \(percentage)% (\(actualProcessed)/\(snapshot.total))"
+            }
         }
         
-        // Apply store updates to list
         applyStoreToList()
         
-        // Show reset button when we have progress
         resetButton.isHidden = (store.processed == 0 && store.total == 0)
     }
     
     func scanningServiceDidComplete(_ service: ScanningService, groups: [PhotoGroup: [String]], others: [String]) {
         store.finalize(groups: groups, others: others)
         
+        PersistenceManager.shared.save(groups: store.groups,
+                                       others: store.others,
+                                       total: store.total,
+                                       processed: store.processed,
+                                       throttle: 0.0,
+                                       force: true)
+        
         DispatchQueue.main.async {
-            self.progressLabel.text = "Scan complete! (\(self.store.total) photos)"
+            let actualProcessed = self.store.groups.values.reduce(0) { $0 + $1.count } + self.store.others.count
+            self.progressLabel.text = "Scan completed! (\(actualProcessed) photos)"
             self.progressView.setProgress(1.0, animated: true)
+            self.store.updateProgress(processed: actualProcessed, total: actualProcessed)
         }
         
         applyStoreToList()

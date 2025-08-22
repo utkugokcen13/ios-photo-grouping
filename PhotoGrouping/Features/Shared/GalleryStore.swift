@@ -23,7 +23,6 @@ final class GalleryStore: ObservableObject {
             self.total = persisted.totalCount
             self.processed = persisted.processedCount
             self.seen = Set(persisted.groups.values.flatMap { $0 } + persisted.others)
-            print("GalleryStore initialized with persisted data: \(groups.count) groups, \(others.count) others, \(processed)/\(total) processed")
         } else {
             print("GalleryStore initialized with no persisted data")
         }
@@ -62,10 +61,8 @@ final class GalleryStore: ObservableObject {
         self.others = others
         self.seen = Set(groups.values.flatMap { $0 } + others)
         self.processed = groups.values.reduce(0, { $0 + $1.count }) + others.count
-        // Update total to reflect actual processed count for better accuracy
         self.total = self.processed
 
-        print("Finalizing scan results: \(groups.count) groups, \(others.count) others, \(processed) total processed")
         PersistenceManager.shared.save(groups: self.groups,
                                        others: self.others,
                                        total: self.total,
@@ -81,6 +78,11 @@ final class GalleryStore: ObservableObject {
         total = 0
         seen = []
         PersistenceManager.shared.clear()
+    }
+    
+    func updateProgress(processed: Int, total: Int) {
+        self.processed = processed
+        self.total = total
     }
 
     var nonEmptyGroups: [(PhotoGroup, Int)] {

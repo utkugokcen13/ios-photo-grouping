@@ -1,5 +1,5 @@
 //
-//  PhotoThumbnailCache.swift
+//  PhotoThumbCache.swift
 //  PhotoGrouping
 //
 //  Created by Utku Gökçen on 22.08.2025.

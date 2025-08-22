@@ -9,8 +9,8 @@ import Foundation
 import Photos
 
 struct Snapshot {
-    let addedByGroup: [PhotoGroup: [String]]   // newly added localIdentifier(s) per group
-    let addedOthers: [String]                  // newly added localIdentifier(s) for Others
+    let addedByGroup: [PhotoGroup: [String]]
+    let addedOthers: [String]
     let processed: Int
     let total: Int
 }
@@ -29,7 +29,6 @@ final class ScanningService {
     private let workQueue = DispatchQueue(label: "scan.queue", qos: .userInitiated, attributes: .concurrent)
     private let throttleQueue = DispatchQueue(label: "scan.throttle") // serial for emit gating
     private let gate = DispatchSemaphore(value: 4) // bounded concurrency
-    // Make these VAR so we can reset:
     private var accumulator = AssetAccumulator()
     private var collector = BatchCollector()
     private let journal = SeenJournal.shared
@@ -39,13 +38,24 @@ final class ScanningService {
     private let emitInterval: TimeInterval = 0.25
     private let emitBatch = 50
     private var initialSeen = Set<String>()
+    private var bootstrapped = false
+
+    // NEW: call this once with persisted store state
+    func bootstrap(groups: [PhotoGroup: [String]],
+                   others: [String],
+                   total: Int,
+                   processed: Int) {
+        Task { await accumulator.bootstrap(groups: groups, others: others, processed: processed)
+               await accumulator.setTotal(total)
+        }
+        bootstrapped = true
+    }
 
     func startScan(initialSeen: Set<String> = []) {
         // Merge with journal
         let journalSeen = self.journal.loadAll()
         let merged = initialSeen.union(journalSeen)
         self.initialSeen = merged
-        print("Starting scan with \(merged.count) seen IDs (persisted:\(initialSeen.count), journal:\(journalSeen.count))")
         isCancelled = false
 
         PHPhotoLibrary.requestAuthorization(for: .readWrite) { [weak self] status in
@@ -113,8 +123,10 @@ final class ScanningService {
 
         Task {
             await accumulator.setTotal(fetch.count)
-            // Seed "processed" so progress is exact on resume
-            for id in initialSeen { _ = await accumulator.insert(id, into: nil) }
+            // If caller didn't bootstrap (older code path), at least seed counts
+            if !bootstrapped {
+                await accumulator.seedProcessed(initialSeen.count)
+            }
         }
 
         // Process all assets with bounded concurrency
@@ -122,10 +134,41 @@ final class ScanningService {
         let initialProcessed = initialSeen.count
         var processedAtLastEmit = initialProcessed
 
+        if !initialSeen.isEmpty {
+
+            var alreadySeenAssets: [PHAsset] = []
+            fetch.enumerateObjects { asset, index, stop in
+                if self.initialSeen.contains(asset.localIdentifier) {
+                    alreadySeenAssets.append(asset)
+                }
+            }
+
+            let fastGroup = DispatchGroup()
+            for asset in alreadySeenAssets {
+                fastGroup.enter()
+                workQueue.async { [weak self] in
+                    defer { fastGroup.leave() }
+                    guard let self = self, !self.isCancelled else { return }
+                    autoreleasepool {
+                        let value = asset.reliableHash()
+                        let g = PhotoGroup.group(for: value)
+                        Task {
+                            await self.accumulator.insertExisting(asset.localIdentifier, into: g)
+                            await self.collector.add(id: asset.localIdentifier, to: g)
+                        }
+                    }
+                }
+            }
+            
+            fastGroup.wait()
+        }
+
         for i in 0..<fetch.count {
             if isCancelled { break }
             let asset = fetch.object(at: i)
             let id = asset.localIdentifier
+
+            // Skip already processed IDs
             if initialSeen.contains(id) { continue }
 
             gate.wait()
@@ -207,7 +250,6 @@ final class ScanningService {
                             others: materialized.others)
                     }
                 }
-                // Clear journal because everything is now persisted
                 self.journal.clear()
             }
         }

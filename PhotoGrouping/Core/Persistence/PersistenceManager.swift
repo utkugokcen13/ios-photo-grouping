@@ -1,3 +1,10 @@
+//
+//  PersistenceManager.swift
+//  PhotoGrouping
+//
+//  Created by Utku Gökçen on 21.08.2025.
+//
+
 import Foundation
 
 struct PersistedGroups: Codable {
@@ -55,8 +62,6 @@ final class PersistenceManager {
         }
 
         if force {
-            print("Force saving persistence data: \(groups.count) groups, \(others.count) others")
-            // Synchronous save for checkpoints to guarantee file is written before suspension
             ioQueue.sync { writeBlock() }
             return
         }

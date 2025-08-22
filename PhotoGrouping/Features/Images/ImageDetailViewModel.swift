@@ -1,4 +1,10 @@
-// ImageDetailViewModel.swift
+//
+//  ImageDetailViewModel.swift
+//  PhotoGrouping
+//
+//  Created by Utku Gökçen on 21.08.2025.
+//
+
 import Foundation
 import SwiftUI
 
