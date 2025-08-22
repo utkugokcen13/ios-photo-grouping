@@ -120,7 +120,7 @@ final class ScanningService {
         // Process all assets with bounded concurrency
         let group = DispatchGroup()
         let initialProcessed = initialSeen.count
-        var processedAtLastEmit = initialProcessed   // <-- instead of 0
+        var processedAtLastEmit = initialProcessed
 
         for i in 0..<fetch.count {
             if isCancelled { break }

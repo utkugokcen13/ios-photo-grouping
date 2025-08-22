@@ -10,20 +10,18 @@ import Photos
 
 // MARK: - Image Detail with Smooth Paging
 struct ImageDetailView: View {
-    let assetIDs: [String]
-    @State var index: Int
+    @StateObject private var vm: ImageDetailViewModel
     @Environment(\.dismiss) private var dismiss
-    
+
     init(assetIDs: [String], startIndex: Int) {
-        self.assetIDs = assetIDs
-        self._index = State(initialValue: startIndex)
+        _vm = StateObject(wrappedValue: ImageDetailViewModel(assetIDs: assetIDs, startIndex: startIndex))
     }
-    
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            
-            if assetIDs.isEmpty {
+
+            if vm.assetIDs.isEmpty {
                 VStack {
                     Image(systemName: "photo")
                         .font(.system(size: 60))
@@ -33,7 +31,7 @@ struct ImageDetailView: View {
                         .font(.title2)
                 }
             } else {
-                PageViewController(pages: assetIDs.map { AssetImageView(assetID: $0) }, currentIndex: $index)
+                PageViewController(pages: vm.assetIDs.map { AssetImageView(assetID: $0) }, currentIndex: $vm.index)
             }
         }
         .toolbar {
@@ -47,81 +45,134 @@ struct ImageDetailView: View {
     }
 }
 
-// MARK: - UIKit PageViewController Wrapper
+// MARK: - UIKit PageViewController Wrapper (Windowed pool: only ±1, Binding-synced)
 struct PageViewController<Page: View>: UIViewControllerRepresentable {
     var pages: [Page]
     @Binding var currentIndex: Int
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-    
+
+    func makeCoordinator() -> Coordinator { Coordinator(currentIndex: $currentIndex) }
+
     func makeUIViewController(context: Context) -> UIPageViewController {
-        let vc = UIPageViewController(
-            transitionStyle: .scroll,
-            navigationOrientation: .horizontal
-        )
-        vc.dataSource = context.coordinator
-        vc.delegate = context.coordinator
-        
-        let first = context.coordinator.controllers[currentIndex]
-        vc.setViewControllers([first], direction: .forward, animated: false)
-        
-        return vc
+        let pvc = UIPageViewController(transitionStyle: .scroll, navigationOrientation: .horizontal)
+        pvc.dataSource = context.coordinator
+        pvc.delegate = context.coordinator
+
+        context.coordinator.totalCount = pages.count
+        context.coordinator.provider = { index in
+            guard index >= 0 && index < pages.count else { return nil }
+            if let vc = context.coordinator.pool[index] { return vc }
+            let vc = UIHostingController(rootView: pages[index])
+            context.coordinator.pool[index] = vc
+            return vc
+        }
+
+        let start = max(0, min(currentIndex, pages.count - 1))
+        if let startVC = context.coordinator.provider?(start) {
+            pvc.setViewControllers([startVC], direction: .forward, animated: false)
+            context.coordinator.visibleIndex = start
+            context.coordinator.trimPool(around: start)
+            // Binding'i başlangıçta da senkronla
+            if context.coordinator.currentIndexBinding.wrappedValue != start {
+                context.coordinator.currentIndexBinding.wrappedValue = start
+            }
+        }
+        return pvc
     }
-    
-    func updateUIViewController(_ pageVC: UIPageViewController, context: Context) {
-        let controller = context.coordinator.controllers[currentIndex]
-        pageVC.setViewControllers([controller], direction: .forward, animated: false)
-    }
-    
-    class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
-        var parent: PageViewController
-        var controllers: [UIViewController]
-        
-        init(_ parent: PageViewController) {
-            self.parent = parent
-            self.controllers = parent.pages.map { UIHostingController(rootView: $0) }
-        }
-        
-        func pageViewController(
-            _ pageViewController: UIPageViewController,
-            viewControllerBefore viewController: UIViewController
-        ) -> UIViewController? {
-            guard let index = controllers.firstIndex(of: viewController) else { return nil }
-            return index == 0 ? nil : controllers[index - 1]
-        }
-        
-        func pageViewController(
-            _ pageViewController: UIPageViewController,
-            viewControllerAfter viewController: UIViewController
-        ) -> UIViewController? {
-            guard let index = controllers.firstIndex(of: viewController) else { return nil }
-            return index + 1 == controllers.count ? nil : controllers[index + 1]
-        }
-        
-        func pageViewController(
-            _ pageViewController: UIPageViewController,
-            didFinishAnimating finished: Bool,
-            previousViewControllers: [UIViewController],
-            transitionCompleted completed: Bool
-        ) {
-            if completed, let visible = pageViewController.viewControllers?.first,
-               let index = controllers.firstIndex(of: visible) {
-                parent.currentIndex = index
+
+    func updateUIViewController(_ pvc: UIPageViewController, context: Context) {
+        let C = context.coordinator
+        C.totalCount = pages.count
+
+        // Swipe/anim sırasında veya programatik set sürerken dokunma
+        guard !C.isAnimating, !C.isProgrammaticSet else { return }
+
+        // Görünür index ile binding farklıysa, hizala
+        if let visible = pvc.viewControllers?.first,
+           let visIdx = C.index(of: visible),
+           visIdx != currentIndex,
+           let target = C.provider?(currentIndex) {
+
+            let dir: UIPageViewController.NavigationDirection = currentIndex > visIdx ? .forward : .reverse
+            C.isProgrammaticSet = true
+            pvc.setViewControllers([target], direction: dir, animated: false) { _ in
+                C.isProgrammaticSet = false
+                C.visibleIndex = currentIndex
+                C.trimPool(around: currentIndex)
             }
         }
     }
+
+    final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
+        var pool: [Int: UIViewController] = [:]
+        var provider: ((Int) -> UIViewController?)?
+        var totalCount: Int = 0
+
+        let currentIndexBinding: Binding<Int>
+
+        var isAnimating = false
+        var isProgrammaticSet = false
+        var visibleIndex: Int?
+
+        init(currentIndex: Binding<Int>) {
+            self.currentIndexBinding = currentIndex
+        }
+
+        func index(of vc: UIViewController) -> Int? {
+            return pool.first(where: { $0.value === vc })?.key
+        }
+
+        func trimPool(around pivot: Int) {
+            let keep = Set([pivot - 1, pivot, pivot + 1].filter { $0 >= 0 && $0 < totalCount })
+            for (idx, vc) in pool where !keep.contains(idx) {
+                pool.removeValue(forKey: idx)
+                _ = vc.view
+            }
+        }
+
+        // MARK: Data Source
+        func pageViewController(_ pvc: UIPageViewController, viewControllerBefore vc: UIViewController) -> UIViewController? {
+            guard let idx = index(of: vc), idx > 0 else { return nil }
+            return provider?(idx - 1)
+        }
+        func pageViewController(_ pvc: UIPageViewController, viewControllerAfter vc: UIViewController) -> UIViewController? {
+            guard let idx = index(of: vc), idx + 1 < totalCount else { return nil }
+            return provider?(idx + 1)
+        }
+
+        // MARK: Delegate
+        func pageViewController(_ pvc: UIPageViewController, willTransitionTo pending: [UIViewController]) {
+            isAnimating = true
+        }
+
+        func pageViewController(_ pvc: UIPageViewController,
+                                didFinishAnimating finished: Bool,
+                                previousViewControllers: [UIViewController],
+                                transitionCompleted completed: Bool) {
+            isAnimating = false
+            guard completed,
+                  let current = pvc.viewControllers?.first,
+                  let idx = index(of: current) else { return }
+
+            if currentIndexBinding.wrappedValue != idx {
+                currentIndexBinding.wrappedValue = idx
+            }
+            visibleIndex = idx
+            trimPool(around: idx)
+        }
+    }
 }
+
+
 
 // MARK: - AssetImageView with Flicker Fix
 struct AssetImageView: View {
     let assetID: String
     @State private var image: UIImage?
     @State private var isLoading = true
-    
+    @State private var requestID: PHImageRequestID?
+
     private let imageManager = PHCachingImageManager.default()
-    
+
     var body: some View {
         Group {
             if let image = image {
@@ -145,31 +196,27 @@ struct AssetImageView: View {
             }
         }
         .onAppear { loadImage() }
+        .onDisappear { if let id = requestID { imageManager.cancelImageRequest(id) } }
     }
-    
+
     private func loadImage() {
         let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetID], options: nil).firstObject
-        guard let asset = asset else {
-            isLoading = false
-            return
-        }
-        
+        guard let asset = asset else { isLoading = false; return }
+
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat
         options.isNetworkAccessAllowed = true
         options.isSynchronous = false
         options.resizeMode = .fast
-        options.isNetworkAccessAllowed = true
-        
-        imageManager.requestImage(
+
+        requestID = imageManager.requestImage(
             for: asset,
             targetSize: UIScreen.main.bounds.size * UIScreen.main.scale,
             contentMode: .aspectFit,
             options: options
         ) { result, info in
-            // Skip degraded images completely
             if let degraded = info?[PHImageResultIsDegradedKey] as? Bool, degraded { return }
-            
+            if let cancelled = info?[PHImageCancelledKey] as? Bool, cancelled { return }
             DispatchQueue.main.async {
                 self.image = result
                 self.isLoading = false

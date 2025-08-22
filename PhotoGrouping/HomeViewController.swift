@@ -9,9 +9,7 @@ import UIKit
 import SwiftUI
 
 class HomeViewController: UIViewController {
-    
-    // MARK: - Types
-    
+
     enum Section {
         case main
     }
@@ -40,7 +38,7 @@ class HomeViewController: UIViewController {
     
     private let store = GalleryStore()
     private let scanner = ScanningService()
-    private let debouncer = Debouncer(delay: 0.05)  // 0.1 -> 0.05
+    private let debouncer = Debouncer(delay: 0.05)
     private let progressDebouncer = Debouncer(delay: 0.15)
     
     private let progressView = UIProgressView(progressViewStyle: .default)
@@ -49,7 +47,7 @@ class HomeViewController: UIViewController {
     private var updateCoordinator: ListUpdateCoordinator!
     private var observers: [NSObjectProtocol] = []
     private let resetButton = UIButton(type: .system)
-    private let row = UIStackView() // Horizontal stack for progress label and reset button
+    private let row = UIStackView()
     
     // MARK: - Lifecycle
     
@@ -60,7 +58,7 @@ class HomeViewController: UIViewController {
         setupDataSource()
         setupScanner()
         
-        applyStoreToList() // show persisted data immediately if any
+        applyStoreToList()
         
         // Update progress UI if we have persisted data
         if store.processed > 0 {
@@ -68,7 +66,7 @@ class HomeViewController: UIViewController {
             progressView.setProgress(progress, animated: false)
             let percentage = Int(100.0 * progress)
             progressLabel.text = "Resuming scan: \(percentage)% (\(store.processed)/\(store.total))"
-            resetButton.isHidden = false // Show reset button when resuming
+            resetButton.isHidden = false
         } else {
             // Show initial state
             progressView.setProgress(0.0, animated: false)
@@ -325,10 +323,8 @@ extension HomeViewController: ScanningServiceDelegate {
             self.progressView.setProgress(1.0, animated: true)
         }
         
-        // Apply final store updates to list
         applyStoreToList()
         
-        // Always show reset button when complete
         resetButton.isHidden = false
     }
     

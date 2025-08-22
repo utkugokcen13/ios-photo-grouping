@@ -49,7 +49,6 @@ final class GalleryStore: ObservableObject {
         }
 
         // Persist throttled in background
-        print("Saving snapshot update: \(snapshot.addedByGroup.values.flatMap { $0 }.count + snapshot.addedOthers.count) new items")
         PersistenceManager.shared.save(groups: groups,
                                        others: others,
                                        total: total,
